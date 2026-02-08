@@ -1,3 +1,21 @@
-streamlit
-paramiko
-google.genai
+# --- Core UI & App ---
+streamlit==1.39.0            # Web UI framework
+altair==5.3.0                 # Charts
+pandas==2.2.3                 # Dataframes
+
+# --- System & OS metrics ---
+psutil==6.0.0                 # CPU/memory/disk/network stats
+python-dotenv==1.0.1          # Load .env (GEMINI_API_KEY, etc.)
+
+# --- AI (Gemini) ---
+google-genai==0.2.0           # Gemini API client
+
+# --- Export: Excel & PDF ---
+openpyxl==3.1.5               # Excel writer engine for pandas
+reportlab==4.2.5              # PDF generation (optional but recommended)
+
+# --- Optional: SNMP switch port mapping ---
+pysnmp==4.4.12                # SNMP client for network device queries
+
+# --- Transitive utilities (often preinstalled, kept for reliability) ---
+numpy==1.26.4                 # Used by pandas/altair under the hood
