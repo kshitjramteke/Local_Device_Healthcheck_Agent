@@ -1,5 +1,3 @@
-# Local_Device_Healthcheck_Agent
-
 # Local Device Health Check Dashboard
 
 A Streamlit-based application to monitor **CPU, Memory, Disk, and Network** health on a local device with **AI‑generated fixes**, **real‑time sampling**, **exports**, and a **chat‑based health agent**.
@@ -222,4 +220,5 @@ Store metrics in SQLite for 7‑day trends
 Add alerts for threshold breaches
 Email PDF reports
 Add GPU / disk I/O monitoring
+
 Integrate with ITSM tools
