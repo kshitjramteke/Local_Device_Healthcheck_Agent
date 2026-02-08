@@ -59,7 +59,7 @@ Updated Health Check Agent/
 │  └─ health_check.py          # System & base network checks
 ├─ frontend/
 │  ├─ assets/
-│  │  └─ cognizant_logo.png    # Optional logo
+│  │  └─ logo.png              # Optional logo
 │  └─ frontend.py              # Streamlit dashboard
 ├─ venv/                       # Virtual environment (local)
 ├─ requirements.txt
@@ -222,3 +222,4 @@ Email PDF reports
 Add GPU / disk I/O monitoring
 
 Integrate with ITSM tools
+
