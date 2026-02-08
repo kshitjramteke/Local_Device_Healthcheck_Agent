@@ -1,6 +1,6 @@
 # -------------------------------------------
 # Cognizant Local Device Health Check Dashboard
-# Frontend (Streamlit) - Extended
+# Frontend (Streamlit) - Extended with AI Fixes
 # -------------------------------------------
 
 # --- Ensure sibling package imports work even if run from inside 'frontend' ---
@@ -258,7 +258,7 @@ def get_richer_network_info() -> list[dict]:
 def snmp_mac_to_port(switch_ip: str, community: str, mac_address: str) -> dict | None:
     """
     Attempts to map a client MAC to the switch port via BRIDGE/IF MIBs.
-    Returns dict {ifIndex, ifDescr/ifName} or None if not found.
+    Returns dict {ifIndex, ifName, ifDescr} or None if not found.
     Requires pysnmp; returns None on ImportError or any failure.
     """
     try:
@@ -280,7 +280,6 @@ def snmp_mac_to_port(switch_ip: str, community: str, mac_address: str) -> dict |
         ctx = ContextData()
 
         # 1) Walk FDB to find dot1dBasePort for the MAC
-        # BRIDGE-MIB::dot1dTpFdbPort .1.3.6.1.2.1.17.4.3.1.2.<mac>
         fdb_oid_prefix = "1.3.6.1.2.1.17.4.3.1.2"
         # 2) dot1dBasePort -> ifIndex
         baseport_ifindex = "1.3.6.1.2.1.17.1.4.1.2"
@@ -289,8 +288,6 @@ def snmp_mac_to_port(switch_ip: str, community: str, mac_address: str) -> dict |
         ifname_prefix  = "1.3.6.1.2.1.31.1.1.1.1"
 
         mac_suffix = mac_str_to_oid_suffix(mac_address)
-        # Query FDB for the exact MAC OID
-        # Some switches need a walk; we'll walk and match.
         fdb_port = None
         for (err_ind, err_stat, err_idx, var_binds) in nextCmd(
             engine, auth, target, ctx,
@@ -313,7 +310,7 @@ def snmp_mac_to_port(switch_ip: str, community: str, mac_address: str) -> dict |
         if not fdb_port:
             return None
 
-        # Walk baseport->ifIndex table to map fdb_port (dot1dBasePort) -> ifIndex
+        # Map baseport -> ifIndex
         ifindex = None
         for (err_ind, err_stat, err_idx, var_binds) in nextCmd(
             engine, auth, target, ctx,
@@ -360,6 +357,54 @@ def snmp_mac_to_port(switch_ip: str, community: str, mac_address: str) -> dict |
     except Exception:
         return None
 
+# ----- AI Fixes Helper -----
+def generate_ai_fixes(cpu, mem, disk, net_summary):
+    """
+    Generate AI-based fixes using Gemini based on system metrics.
+    Returns plain text recommendations (safe & non-destructive).
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return "❌ AI recommendations unavailable (GEMINI_API_KEY not configured)."
+
+    try:
+        import google.genai as genai
+        client = genai.Client(api_key=api_key)
+
+        prompt = f"""
+        You are an enterprise IT System Health Assistant.
+
+        Analyze the following local system health metrics and provide:
+        1. Likely causes
+        2. Immediate safe actions
+        3. Preventive best practices
+
+        Constraints:
+        - Do NOT suggest destructive actions
+        - Do NOT suggest command execution
+        - Keep recommendations suitable for corporate laptops
+        - Use bullet points and clear headings
+        - Keep it concise but actionable
+
+        System Metrics:
+        - CPU Usage: {cpu}%
+        - Memory Usage: {mem}%
+        - Disk Usage: {disk}%
+        - Network Summary: {net_summary}
+
+        Respond in a professional, concise, and actionable format.
+        """
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        return response.text
+
+    except Exception as e:
+        return f"⚠️ AI recommendation service unavailable: {e}"
+
 # =========================
 # Sidebar (controls)
 # =========================
@@ -367,7 +412,7 @@ with st.sidebar:
     st.header("⚙️ Controls")
     st.caption("Run on-demand checks and view advanced details.")
 
-    run_now = st.button("🔍 Run Health Check", use_container_width=True)
+    run_now = st.button("🔍 Run Health Check")
     show_adv = st.toggle("Show advanced network details", value=True)
 
     st.markdown("---")
@@ -378,7 +423,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📡 Live Sampling")
     sample_secs = st.number_input("Duration (seconds)", min_value=5, max_value=300, value=30, step=5)
-    start_stream = st.button("▶ Start Live Sampling", use_container_width=True)
+    start_stream = st.button("▶ Start Live Sampling")
 
     st.markdown("---")
     st.subheader("🛰 Switch Port Lookup (SNMP)")
@@ -524,7 +569,6 @@ with tab1:
     # ================== Export ==================
     st.subheader("📤 Export Current Snapshot")
 
-    # Build snapshot dicts
     snapshot = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "device": get_device_name(),
@@ -537,23 +581,32 @@ with tab1:
     }
     net_rows = get_richer_network_info()
 
-    # CSV bytes
-    csv_buf = BytesIO()
-    df_export = pd.DataFrame([snapshot])
-    df_net = pd.DataFrame(net_rows)
-    with pd.ExcelWriter(csv_buf, engine="openpyxl") as xw:
-        df_export.to_excel(xw, sheet_name="Snapshot", index=False)
-        if not df_net.empty:
-            df_net.to_excel(xw, sheet_name="Network", index=False)
-    csv_bytes = csv_buf.getvalue()
-
-    st.download_button(
-        "⬇️ Download Excel (Snapshot + Network)",
-        data=csv_bytes,
-        file_name=f"health_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+    # Excel (snapshot + network), fallback to CSV if openpyxl/reportlab missing
+    excel_bytes = None
+    try:
+        from pandas import ExcelWriter
+        excel_buf = BytesIO()
+        with pd.ExcelWriter(excel_buf, engine="openpyxl") as xw:
+            pd.DataFrame([snapshot]).to_excel(xw, sheet_name="Snapshot", index=False)
+            df_net = pd.DataFrame(net_rows)
+            if not df_net.empty:
+                df_net.to_excel(xw, sheet_name="Network", index=False)
+        excel_bytes = excel_buf.getvalue()
+        st.download_button(
+            "⬇️ Download Excel (Snapshot + Network)",
+            data=excel_bytes,
+            file_name=f"health_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except Exception as e:
+        st.caption(f"Excel export unavailable: {e} — falling back to CSV.")
+        csv_bytes = pd.DataFrame([snapshot]).to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Download CSV (Snapshot)",
+            data=csv_bytes,
+            file_name=f"health_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
 
     # PDF bytes (optional)
     def make_pdf_bytes(snapshot_dict: dict, net_list: list[dict]) -> bytes | None:
@@ -614,7 +667,6 @@ with tab1:
             data=pdf_bytes,
             file_name=f"health_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
             mime="application/pdf",
-            use_container_width=True
         )
     else:
         st.caption("Install `reportlab` to enable PDF export: `pip install reportlab`")
@@ -679,16 +731,116 @@ with tab2:
                 st.markdown(reply_text)
 
 # =========================
-# Footer / Notes
+# Actionable Notes (Rule‑Based + AI)
 # =========================
 st.divider()
-with st.expander("ℹ️ Notes"):
-    st.markdown(
-        "- **Port/Index** = Windows **ifIndex** for the active network adapter. "
-        "Physical **switch port discovery** requires querying the switch (SNMP/CDP/LLDP). "
-        "If you can provide switch IP + SNMP read credentials, the app will attempt a lookup."
+
+with st.expander("🛠️ Post Health‑Check Fixes & Recommendations", expanded=False):
+
+    st.markdown("### ✅ Recommended Actions After Running Health Check")
+
+    # Pull from last_results to ensure availability outside tab1
+    current = st.session_state.last_results or {"CPU Usage": 0, "Memory Usage": 0, "Disk Usage": 0}
+    cpu = current.get("CPU Usage", 0)
+    mem = current.get("Memory Usage", 0)
+    disk = current.get("Disk Usage", 0)
+
+    # ---------------- CPU ----------------
+    if cpu >= 80:
+        st.markdown("#### 🔴 High CPU Usage Detected")
+        st.markdown("""
+        - Close unused or background applications (Task Manager → Processes).
+        - Check for long‑running or stuck processes consuming CPU.
+        - Restart applications that are not responding.
+        - Ensure antivirus scans are not running repeatedly.
+        - Reboot the system if high CPU persists for a long time.
+        """)
+    else:
+        st.markdown("#### 🟢 CPU Status Normal")
+        st.markdown("""
+        - No immediate CPU‑related action required.
+        - Continue monitoring during peak usage hours.
+        """)
+
+    # ---------------- Memory ----------------
+    if mem >= 80:
+        st.markdown("#### 🔴 High Memory Usage Detected")
+        st.markdown("""
+        - Close unused browser tabs and memory‑heavy applications.
+        - Restart applications consuming excessive memory.
+        - Disable unnecessary startup programs.
+        - Consider upgrading RAM if usage is consistently high.
+        """)
+    else:
+        st.markdown("#### 🟢 Memory Status Normal")
+        st.markdown("""
+        - Memory utilization is within acceptable limits.
+        - No optimization needed at this time.
+        """)
+
+    # ---------------- Disk ----------------
+    if disk >= 85:
+        st.markdown("#### 🔴 High Disk Usage Detected")
+        st.markdown("""
+        - Delete temporary files (Disk Cleanup / Storage Sense).
+        - Clear application cache folders.
+        - Remove unused software and old files.
+        - Ensure sufficient free space (minimum 15–20% recommended).
+        """)
+    else:
+        st.markdown("#### 🟢 Disk Status Normal")
+        st.markdown("""
+        - Disk space is healthy.
+        - Maintain regular cleanup to avoid future issues.
+        """)
+
+    # ---------------- Network ----------------
+    st.markdown("#### 🌐 Network Connectivity Recommendations")
+    st.markdown("""
+    - Prefer **wired (Ethernet)** connections for stability and speed.
+    - If on Wi‑Fi:
+      - Move closer to the access point.
+      - Avoid congested networks.
+      - Switch to 5 GHz where available.
+    - Disconnect VPN if not required for current work.
+    - Restart network adapter if frequent drops are observed.
+    """)
+
+    # ---------------- General ----------------
+    st.markdown("#### 🧠 General Best Practices")
+    st.markdown("""
+    - Restart your system periodically to clear stale processes.
+    - Keep OS and drivers updated.
+    - Avoid running heavy applications simultaneously.
+    - Schedule regular health checks to catch issues early.
+    """)
+
+    st.markdown("---")
+    st.caption(
+        "💡 These recommendations are safe, non‑intrusive actions. "
+        "For persistent issues, contact IT support or system administrators."
     )
-    st.markdown(
-        "- Real-time sampling runs in the current session. For continuous background monitoring, "
-        "consider a lightweight service that writes samples to a local DB and renders in Streamlit."
-    )
+
+    # ---------------- AI‑Generated Fixes ----------------
+    st.markdown("---")
+    st.markdown("### 🤖 AI‑Generated Fixes (Based on Current Health Check)")
+
+    # Build a short network summary for AI
+    net_info = get_richer_network_info()
+    if net_info:
+        primary_net = net_info[0]
+        net_summary = (
+            f"{primary_net.get('Type')} connection, "
+            f"Speed: {primary_net.get('Speed')}, "
+            f"Quality: {primary_net.get('Quality')}"
+        )
+    else:
+        net_summary = "No active network detected"
+
+    # Let user trigger or regenerate AI suggestions
+    if st.button("✨ Generate / Regenerate AI Fixes"):
+        with st.spinner("Analyzing system metrics and generating AI recommendations…"):
+            ai_fixes = generate_ai_fixes(cpu, mem, disk, net_summary)
+        st.markdown(ai_fixes)
+    else:
+        st.caption("Click above to generate tailored AI recommendations for this snapshot.")
